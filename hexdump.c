@@ -1,27 +1,44 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define BUFF_BYTES 1024
 
 void print_binary (const size_t bytes_to_read, unsigned char *binary_data);
+void read_file_binary (FILE* fp);
+void cli_syntax (void);
 
 int main (int argc, char *argv[]) {
-	if (argc != 2) {
-		printf("Enter the name of the file you want to hexdump\n");
-		exit(EXIT_FAILURE);
+	if (argc < 2 || argc > 3) {
+		cli_syntax();
+	}
+	
+	int mode = 0;
+
+	if (argc == 3) {
+		if (strcmp(argv[1], "binary") == 0) {
+			mode = 0;
+		}
+		else if (strcmp(argv[1], "hex") == 0) {
+			mode = 1;
+		}
+		else {
+			cli_syntax();
+		}
 	}
 
-	size_t fread_count = 0;
-	FILE* fp = fopen(argv[1], "rb");
-
+	FILE* fp = fopen(argv[argc-1], "rb"); // argc-1 means the last CLI arg is the file name
 	if (fp == NULL) {
 		printf("Failed to open file. Did you spell it correctly? (Extensions must be included)\n");
 		exit(EXIT_FAILURE);
 	}
 
-	unsigned char buff[BUFF_BYTES]; // unsigned char data type to hold binary cuz its guaranteed to be 1 byte (8 bits) long on all standard systems
-	while ((fread_count = fread(buff, sizeof(char), sizeof(buff), fp)) > 0) { // sizeof(char) is one but for the sake of readability ive included it
-		print_binary(fread_count, buff);
+	if (mode == 0) {
+		read_file_binary(fp);
+	}
+	else
+	{
+		printf("TBA\n");
 	}
 	
 	fclose(fp);
@@ -43,4 +60,20 @@ void print_binary (const size_t bytes_to_read, unsigned char *binary_data) {
 
 	buff_output[buff_index] = '\0';
 	fputs(buff_output, stdout); // alot faster than printf cuz of no format specifiers
+}
+
+void read_file_binary (FILE* fp) {
+	size_t fread_count = 0;
+
+	unsigned char buff[BUFF_BYTES]; // unsigned char data type to hold binary cuz its guaranteed to be 1 byte (8 bits) long on all standard systems
+	while ((fread_count = fread(buff, sizeof(char), sizeof(buff), fp)) > 0) { // sizeof(char) is one but for the sake of readability ive included it
+		print_binary(fread_count, buff);
+	}
+}
+
+void cli_syntax(void) {
+	printf(
+		"Invalid option -- hexdump [opt: binary | hex] filename.extension\n"
+	);
+	exit(EXIT_FAILURE);
 }
