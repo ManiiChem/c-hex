@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define BUFF_BYTES 1024
+
 void print_binary (const size_t bytes_to_read, unsigned char *binary_data);
 
 int main (int argc, char *argv[]) {
@@ -17,7 +19,7 @@ int main (int argc, char *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
-	unsigned char buff[1024]; // unsigned char data type to hold binary cuz its guaranteed to be 1 byte (8 bits) long on all standard systems
+	unsigned char buff[BUFF_BYTES]; // unsigned char data type to hold binary cuz its guaranteed to be 1 byte (8 bits) long on all standard systems
 	while ((fread_count = fread(buff, sizeof(char), sizeof(buff), fp)) > 0) { // sizeof(char) is one but for the sake of readability ive included it
 		print_binary(fread_count, buff);
 	}
@@ -27,11 +29,18 @@ int main (int argc, char *argv[]) {
 }
 
 void print_binary (const size_t bytes_to_read, unsigned char *binary_data) {
-	for (int i = 0; i < bytes_to_read; i++) { // // using 'count' so u dont read more than the count size and read garbage data
+	char buff_output[(BUFF_BYTES * 9) + 1]; // each char has 8 bits, +1 is for the NULL terminator and the +1 to x8 for the whitespace lol
+	int buff_index = 0;
+	for (size_t i = 0; i < bytes_to_read; i++) { // // using 'count' so u dont read more than the count size and read garbage data
 		// loop through the 8 bits of each byte
 		for (int j = 7; j > -1; j--) {
-			printf("%d", (binary_data[i] >> j) & 1); // shift each bit starting from the leftmost bit, then isolate only the right most bit and discard anything to the left of it
+			// shift each bit starting from the leftmost bit, then isolate only the right most bit and discard anything to the left of it
+			// basically if ((binary_data[i] >> j) & 1) which is 1 if its add '1' otherwise add '0' to the buffer
+			buff_output[buff_index++] = ((binary_data[i] >> j) & 1) ? '1' : '0';	
 		}
-		printf(" ");
+		buff_output[buff_index++] = ' ';
 	}
+
+	buff_output[buff_index] = '\0';
+	fputs(buff_output, stdout); // alot faster than printf cuz of no format specifiers
 }
