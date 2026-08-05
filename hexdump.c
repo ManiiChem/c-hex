@@ -3,9 +3,12 @@
 #include <string.h>
 
 #define BUFF_BYTES 1024
+#define BUFF_BYTES_HEX 16 // formats better in the terminal
 
 void print_binary (const size_t bytes_to_read, unsigned char *binary_data);
 void read_file_binary (FILE* fp);
+void print_hex (const size_t bytes_to_read, unsigned char* binary_data);
+void read_file_hex (FILE* fp);
 void cli_syntax (void);
 
 int main (int argc, char *argv[]) {
@@ -38,7 +41,7 @@ int main (int argc, char *argv[]) {
 	}
 	else
 	{
-		printf("TBA\n");
+		read_file_hex(fp);
 	}
 	
 	fclose(fp);
@@ -71,7 +74,31 @@ void read_file_binary (FILE* fp) {
 	}
 }
 
-void cli_syntax(void) {
+void print_hex (const size_t bytes_to_read, unsigned char* binary_data) {
+	char buff_output[(BUFF_BYTES_HEX * 3) + 1]; // one hex is equal to 4 bits so * 2 for the whole byte + (*1) for the whitespace and +1 for the NULL terminator
+	int buff_index = 0;
+
+	for (size_t i = 0; i < bytes_to_read; i++) {
+		// overwriting the null terminator by adding len to buff_index, also sprintf is secure in this case so no need to use snprintf
+		unsigned int len = sprintf(&buff_output[buff_index], "%02X ", binary_data[i]); // this adds a null terminator
+		buff_index += len;
+	}
+
+	// sprintf automatically adds a '\0' so we dont need to add it here..
+	fputs(buff_output, stdout);
+	printf("\n");
+}
+
+void read_file_hex (FILE* fp) {
+	size_t fread_count = 0;
+
+	unsigned char buff[BUFF_BYTES_HEX];
+	while ((fread_count = fread(buff, sizeof(char), sizeof(buff), fp)) > 0) {
+		print_hex(fread_count, buff);
+	}
+}
+
+void cli_syntax (void) {
 	printf(
 		"Invalid option -- hexdump [opt: binary | hex] filename.extension\n"
 	);
