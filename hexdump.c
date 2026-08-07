@@ -7,7 +7,7 @@
 
 void print_binary (const size_t bytes_to_read, unsigned char *binary_data);
 void read_file_binary (FILE* fp);
-void print_hex (const size_t bytes_to_read, unsigned char* binary_data);
+void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off);
 void read_file_hex (FILE* fp);
 void cli_syntax (void);
 
@@ -74,10 +74,12 @@ void read_file_binary (FILE* fp) {
 	}
 }
 
-void print_hex (const size_t bytes_to_read, unsigned char* binary_data) {
+void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off) {
 	char buff_output[(BUFF_BYTES_HEX * 3) + 1]; // one hex is equal to 4 bits so * 2 for the whole byte + (*1) for the whitespace and +1 for the NULL terminator
 	int buff_index = 0;
 
+	// 32bit max so this tool technically doesnt support hexediting and hexdumping files larger than 4GB as of now, easy fix tho maybe ill add a flag in the future
+	printf("%08zX    ", mem_off);
 	for (size_t i = 0; i < bytes_to_read; i++) {
 		// overwriting the null terminator by adding len to buff_index, also sprintf is secure in this case so no need to use snprintf
 		unsigned int len = sprintf(&buff_output[buff_index], "%02X ", binary_data[i]); // this adds a null terminator
@@ -90,11 +92,12 @@ void print_hex (const size_t bytes_to_read, unsigned char* binary_data) {
 }
 
 void read_file_hex (FILE* fp) {
-	size_t fread_count = 0;
+	size_t fread_count, current_mem_offset = 0;
 
 	unsigned char buff[BUFF_BYTES_HEX];
 	while ((fread_count = fread(buff, sizeof(char), sizeof(buff), fp)) > 0) {
-		print_hex(fread_count, buff);
+		print_hex(fread_count, buff, current_mem_offset);
+		current_mem_offset += fread_count; // appending the number of bytes we've read so we track the exact value and avoid fread() hiccups when it returns short reads (i was tracking 16 byte chunks earlier lol)
 	}
 }
 
