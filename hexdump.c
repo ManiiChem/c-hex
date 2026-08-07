@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h> 
 
 #define BUFF_BYTES 1024
 #define BUFF_BYTES_HEX 16 // formats better in the terminal
@@ -78,16 +79,29 @@ void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t m
 	char buff_output[(BUFF_BYTES_HEX * 3) + 1]; // one hex is equal to 4 bits so * 2 for the whole byte + (*1) for the whitespace and +1 for the NULL terminator
 	int buff_index = 0;
 
+	char ascii_buff[BUFF_BYTES_HEX + 1 + 4]; // each char + NULL terminator + 4 whitespaces to format better
+	ascii_buff[0] = ' ';
+	ascii_buff[1] = ' ';
+	ascii_buff[2] = ' ';
+	ascii_buff[3] = ' ';
+	int ascii_buff_index = 4; // hard coding spaces like this may not look pretty but its actually very fast and lightweight
+
 	// 32bit max so this tool technically doesnt support hexediting and hexdumping files larger than 4GB as of now, easy fix tho maybe ill add a flag in the future
 	printf("%08zX    ", mem_off);
 	for (size_t i = 0; i < bytes_to_read; i++) {
 		// overwriting the null terminator by adding len to buff_index, also sprintf is secure in this case so no need to use snprintf
 		unsigned int len = sprintf(&buff_output[buff_index], "%02X ", binary_data[i]); // this adds a null terminator
 		buff_index += len;
+
+		ascii_buff[ascii_buff_index++] = isprint(binary_data[i]) ? binary_data[i] : '.';
 	}
 
 	// sprintf automatically adds a '\0' so we dont need to add it here..
 	fputs(buff_output, stdout);
+
+	ascii_buff[ascii_buff_index] = '\0';
+	fputs(ascii_buff, stdout);
+
 	printf("\n");
 }
 
