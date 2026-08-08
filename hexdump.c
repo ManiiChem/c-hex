@@ -2,17 +2,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h> 
+#include <windows.h> // VT Sequences for TUI
 
 #define BUFF_BYTES 1024
 #define BUFF_BYTES_HEX 16 // formats better in the terminal
+
+// global terminal state 
+HANDLE h_out, h_in;
+DWORD dw_original_out_mode = 0;
+DWORD dw_original_in_mode = 0;
 
 void print_binary (const size_t bytes_to_read, unsigned char *binary_data);
 void read_file_binary (FILE* fp);
 void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off);
 void read_file_hex (FILE* fp);
 void cli_syntax (void);
+int enable_vt_proc (void);
+void restore_terminal_mode (void);
 
 int main (int argc, char *argv[]) {
+	if (enable_vt_proc() == -1) {
+		printf("Error: Could not enable Windows VT Processing\n");
+		exit(EXIT_FAILURE);
+	}
+
+	// disable VT sequencing when exiting the program
+	atexit(restore_terminal_mode);
+
+	// DEBUG PRINT
+	printf("\x1b[31mits working\x1b[0m\n");
+
 	if (argc < 2 || argc > 3) {
 		cli_syntax();
 	}
@@ -125,4 +144,38 @@ void cli_syntax (void) {
 		"Invalid option -- hexdump [opt: binary | hex] filename.extension\n"
 	);
 	exit(EXIT_FAILURE);
+}
+
+int enable_vt_proc (void) {
+	h_out = GetStdHandle(STD_OUTPUT_HANDLE);
+	if (h_out == INVALID_HANDLE_VALUE) return -1;
+
+	h_in = GetStdHandle(STD_INPUT_HANDLE);
+	if (h_in == INVALID_HANDLE_VALUE) return -1;
+	if (!GetConsoleMode(h_out, &dw_original_out_mode)) return -1;
+
+	DWORD dw_requested_out_modes = ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+	DWORD dw_requested_in_modes = ENABLE_VIRTUAL_TERMINAL_INPUT;
+
+	DWORD dw_out_mode = dw_original_out_mode | dw_requested_out_modes;
+	if (!SetConsoleMode(h_out, dw_out_mode)) {
+		// this means we failed to set both modes so we try to step down mode gracefully
+		dw_requested_out_modes = ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+		dw_out_mode = dw_original_out_mode | dw_requested_out_modes;
+
+		// atp we failed to set any VT mode so cant do anything here
+		if (!SetConsoleMode(h_out, dw_out_mode)) return -1;	
+	}
+
+	DWORD dw_in_mode = dw_original_in_mode | dw_requested_in_modes;
+
+	// same story here, cant do anything more
+	if (!SetConsoleMode(h_in, dw_in_mode)) return -1;
+
+	return 0;
+}
+
+void restore_terminal_mode (void) {
+	SetConsoleMode(h_out, dw_original_out_mode);
+	SetConsoleMode(h_in, dw_original_in_mode);
 }
