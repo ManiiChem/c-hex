@@ -16,6 +16,7 @@ void print_binary (const size_t bytes_to_read, unsigned char *binary_data);
 void read_file_binary (FILE* fp);
 void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off);
 void read_file_hex (FILE* fp);
+void hexedit_file (FILE* fp);
 void cli_syntax (void);
 int enable_vt_proc (void);
 void restore_terminal_mode (void);
@@ -29,14 +30,11 @@ int main (int argc, char *argv[]) {
 	// disable VT sequencing when exiting the program
 	atexit(restore_terminal_mode);
 
-	// DEBUG PRINT
-	printf("\x1b[31mits working\x1b[0m\n");
-
 	if (argc < 2 || argc > 3) {
 		cli_syntax();
 	}
 	
-	int mode = 0;
+	int mode = 3; // default is edit
 
 	if (argc == 3) {
 		if (strcmp(argv[1], "binary") == 0) {
@@ -45,12 +43,16 @@ int main (int argc, char *argv[]) {
 		else if (strcmp(argv[1], "hex") == 0) {
 			mode = 1;
 		}
+		else if (strcmp(argv[1], "edit") == 0) {
+			mode = 3;
+		}
 		else {
 			cli_syntax();
 		}
 	}
 
-	FILE* fp = fopen(argv[argc-1], "rb"); // argc-1 means the last CLI arg is the file name
+	char* file_mode = (mode == 3) ? "rb+" : "rb";
+	FILE* fp = fopen(argv[argc-1], file_mode); // argc-1 means the last CLI arg is the file name
 	if (fp == NULL) {
 		printf("Failed to open file. Did you spell it correctly? (Extensions must be included)\n");
 		exit(EXIT_FAILURE);
@@ -59,9 +61,12 @@ int main (int argc, char *argv[]) {
 	if (mode == 0) {
 		read_file_binary(fp);
 	}
-	else
-	{
+	else if (mode == 1) {
 		read_file_hex(fp);
+	}
+	else {
+		//printf("\x1b[31mEdit Mode it is!\x1b[0m\n");
+		hexedit_file(fp);
 	}
 	
 	fclose(fp);
@@ -139,9 +144,78 @@ void read_file_hex (FILE* fp) {
 	}
 }
 
+void hexedit_file (FILE* fp) {
+	fseek(fp, 0, SEEK_END);
+	long file_size = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+
+	size_t viewport_offset = 0;
+	unsigned char buff[256]; // 16 bytes 16 columns
+
+	while (1) {
+		printf("\x1b[2J\x1b[H");
+		fseek(fp, viewport_offset, SEEK_SET);
+		fread(buff, sizeof(char), sizeof(buff), fp);
+
+		// loop through the array 16 bytes at a time
+		for (size_t i = 0; i < sizeof(buff); i += BUFF_BYTES_HEX) {
+			size_t current_file_offset = viewport_offset + i;
+
+			// stop if we reach the end of the file
+			if (current_file_offset >= file_size) break;
+
+			// check if we have less than 16 bytes left
+			size_t chunk_left = BUFF_BYTES_HEX;
+			if (current_file_offset + chunk_left > file_size) {
+				chunk_left = file_size - current_file_offset;
+			}
+
+			print_hex(chunk_left, &buff[i], current_file_offset);
+		}
+
+		DWORD bytes_read; // to store how many bytes ReadFile has read for safety reasons
+		char user_input[8];
+		int success = ReadFile(h_in, user_input, 1, &bytes_read, NULL);
+		if (success == 0 || bytes_read == 0) continue; // check for input again if something goes wrong
+
+		if (user_input[0] == '\x1b') {
+			// read the next two bytes for example '[' and 'B' 
+			ReadFile(h_in, &user_input[1], 2, &bytes_read, NULL);
+
+			if (user_input[1] == '[') {
+				switch (user_input[2]) {
+				case 'A': // up arrowkey
+					if (viewport_offset >= 16) viewport_offset -= 16;
+					break;
+				case 'B': // down arrowkey
+					if (viewport_offset + 16 < file_size) viewport_offset += 16;
+					break;
+				case 'C': // right arrowkey for now just jumps the whole page 
+					if (viewport_offset + 256 < file_size) viewport_offset += 256;
+					break;
+				case 'D': // left arrowkey for now just pages up
+					if (viewport_offset >= 256) viewport_offset -= 256;
+					else viewport_offset = 0;
+					break;
+				}
+			}
+		}
+		else if (user_input[0] == 'q') {
+			printf("\x1b[2J\x1b[H"); // clr screen rq 
+			exit(EXIT_SUCCESS);
+		}
+	}
+
+	// personal notes
+	// make custom cursor navigation (mostly done)
+	// add replacing functionality
+	// rewrite the whole file or better: Direct Disk Editing
+	// add keybinds like quit, save, search somewhere in the middle (working on it)
+}
+
 void cli_syntax (void) {
 	printf(
-		"Invalid option -- hexdump [opt: binary | hex] filename.extension\n"
+		"Invalid option -- hexdump [opt: binary | hex | edit] filename.extension\n"
 	);
 	exit(EXIT_FAILURE);
 }
