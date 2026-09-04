@@ -3,25 +3,29 @@
 #include <string.h>
 #include <ctype.h> 
 #include <windows.h> // VT Sequences for TUI
+#include <stdint.h>
 
 #define BUFF_BYTES 1024
 #define BUFF_BYTES_HEX 16 // formats better in the terminal
 #define EDIT_BUFF_BYTES 256
-
 
 // global terminal state 
 HANDLE h_out, h_in;
 DWORD dw_original_out_mode = 0;
 DWORD dw_original_in_mode = 0;
 
+char EDIT_INPUT[2] = { '\0', '\0'};
+
 void print_binary (const size_t bytes_to_read, unsigned char *binary_data);
 void read_file_binary (FILE* fp);
-void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off, int interactive, size_t camera_x, size_t camera_y, size_t local_row);
+void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off, int interactive, size_t camera_x, size_t camera_y, size_t local_row, int is_editing);
 void read_file_hex (FILE* fp);
 void hexedit_file (FILE* fp);
 void cli_syntax (void);
 int enable_vt_proc (void);
 void restore_terminal_mode (void);
+void wipe_edit_input (void);
+uint8_t hex_to_dec_val (char chr);
 
 int main (int argc, char *argv[]) {
 	if (enable_vt_proc() == -1) {
@@ -101,7 +105,7 @@ void read_file_binary (FILE* fp) {
 	}
 }
 
-void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off, int interactive, size_t camera_x, size_t camera_y, size_t local_row) {
+void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t mem_off, int interactive, size_t camera_x, size_t camera_y, size_t local_row, int is_editing) {
 	char buff_output[(BUFF_BYTES_HEX * 3) + 1 + 19]; // one hex is equal to 4 bits so * 2 for the whole byte + (*1) for the whitespace and +1 for the NULL terminator
 	// ^^ + 19 because of the hidden VT string characters
 	int buff_index = 0;
@@ -119,7 +123,12 @@ void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t m
 		// overwriting the null terminator by adding len to buff_index, also sprintf is secure in this case so no need to use snprintf
 		unsigned int len;
 		if (interactive && camera_x == i && camera_y == local_row) {
-			len = sprintf(&buff_output[buff_index], "\x1b[7m%02X\x1b[27m ", binary_data[i]); 
+			if (is_editing) {
+				len = sprintf(&buff_output[buff_index], "\x1b[7;41m%02X\x1b[0m ", binary_data[i]);
+			}
+			else {
+				len = sprintf(&buff_output[buff_index], "\x1b[7m%02X\x1b[27m ", binary_data[i]);
+			}
 		}
 		else {
 			len = sprintf(&buff_output[buff_index], "%02X ", binary_data[i]); // this adds a null terminator
@@ -150,7 +159,7 @@ void read_file_hex (FILE* fp) {
 
 	unsigned char buff[BUFF_BYTES_HEX];
 	while ((fread_count = fread(buff, sizeof(char), sizeof(buff), fp)) > 0) {
-		print_hex(fread_count, buff, current_mem_offset, 0, 0, 0, 0);
+		print_hex(fread_count, buff, current_mem_offset, 0, 0, 0, 0, 0);
 		current_mem_offset += fread_count; // appending the number of bytes we've read so we track the exact value and avoid fread() hiccups when it returns short reads (i was tracking 16 byte chunks earlier lol)
 	}
 }
@@ -162,11 +171,42 @@ void hexedit_file (FILE* fp) {
 
 	size_t viewport_offset = 0, camera_x = 0, camera_y = 0;
 	unsigned char buff[EDIT_BUFF_BYTES]; // 16 bytes 16 columns
+	int is_editing = 0;
 
 	// decided to just hide the cursor && enter alternate buffer mode
 	printf("\x1b[?1049h\x1b[?25l");
 
 	while (1) {
+		// This means user has commited the edit, time to execute
+		if (is_editing && EDIT_INPUT[0] != '\0' && EDIT_INPUT[1] != '\0') {
+			// get the raw byte
+			uint8_t byte = (hex_to_dec_val(EDIT_INPUT[0]) << 4) | hex_to_dec_val(EDIT_INPUT[1]);
+
+			// move the file pointer to the target byte
+			size_t target = viewport_offset + (camera_y * 16) + camera_x;
+			fseek(fp, target, SEEK_SET);
+
+			// overwrite the byte and flush to disk
+			fputc(byte, fp);
+			fflush(fp);
+
+			wipe_edit_input();
+
+			if (target + 1 < file_size) {
+				if (camera_x < 15) { // move to the next hex digits
+					camera_x += 1;
+				}
+				else if (camera_y < 15) { // move one line down
+					camera_x = 0;
+					camera_y += 1;
+				}
+				else if (viewport_offset + EDIT_BUFF_BYTES < file_size) { // scroll down if hitting bottom right
+					camera_x = 0;
+					viewport_offset += BUFF_BYTES_HEX; 
+				}
+			}
+		}
+
 		printf("\x1b[2J\x1b[H");
 		fseek(fp, viewport_offset, SEEK_SET);
 		fread(buff, sizeof(char), sizeof(buff), fp);
@@ -185,7 +225,19 @@ void hexedit_file (FILE* fp) {
 				chunk_left = file_size - current_file_offset;
 			}
 
-			print_hex(chunk_left, &buff[i], current_file_offset, 1, camera_x, camera_y, local_row++);
+			print_hex(chunk_left, &buff[i], current_file_offset, 1, camera_x, camera_y, local_row++, is_editing);
+		}
+
+		if (is_editing) {
+			fputs("Overwrite with: ", stdout);
+
+			if (EDIT_INPUT[0] != '\0') {
+				putchar(toupper(EDIT_INPUT[0]));
+			}
+
+			if (EDIT_INPUT[1] != '\0') {
+				putchar(toupper(EDIT_INPUT[1]));
+			}
 		}
 
 		DWORD bytes_read; // to store how many bytes ReadFile has read for safety reasons
@@ -206,19 +258,25 @@ void hexedit_file (FILE* fp) {
 				case 'A': // up arrowkey
 					if (camera_y > 0) {
 						camera_y -= 1;
+						wipe_edit_input();
 					}
 					else if (viewport_offset >= 16) {
 						viewport_offset -= 16;
+						wipe_edit_input();
 					}
+
 					break;
 
 				case 'B': // down arrowkey
 					if (camera_y < 15 && absolute_camera_pos + 16 < file_size) {
 						camera_y += 1;
+						wipe_edit_input();
 					}
 					else if (viewport_offset + 16 < file_size) {
 						viewport_offset += 16;
+						wipe_edit_input();
 					}
+
 					break;
 
 				case 'C': 
@@ -228,39 +286,70 @@ void hexedit_file (FILE* fp) {
 
 					if (camera_x < 15) {
 						camera_x += 1;
+						wipe_edit_input();
 					}
 					else if (camera_y < 15) {
 						camera_x = 0;
 						camera_y += 1;
+						wipe_edit_input();
 					}
+
 					break;
 
 				case 'D':
 					if (camera_x > 0) {
 						camera_x -= 1;
+						wipe_edit_input();
 					}
 					else if (camera_y > 0) {
 						camera_x = 15;
 						camera_y -= 1;
+						wipe_edit_input();
 					}
+
 					break;
 
 				case '5': // page up
 					ReadFile(h_in, &user_input[3], 1, &bytes_read, NULL); // eat the trailing ~
-					if (viewport_offset >= EDIT_BUFF_BYTES) viewport_offset -= EDIT_BUFF_BYTES;
-					else viewport_offset = 0;
+					
+					if (viewport_offset >= EDIT_BUFF_BYTES) {
+						viewport_offset -= EDIT_BUFF_BYTES;
+						wipe_edit_input();
+					}
+					else {
+						viewport_offset = 0;
+						wipe_edit_input();
+					}
+
 					break;
 
 				case '6': // page down
 					ReadFile(h_in, &user_input[3], 1, &bytes_read, NULL); // same reason 
-					if (viewport_offset + EDIT_BUFF_BYTES < file_size) viewport_offset += EDIT_BUFF_BYTES;
+					
+					if (viewport_offset + EDIT_BUFF_BYTES < file_size) {
+						viewport_offset += EDIT_BUFF_BYTES;
+						wipe_edit_input();
+					}
+
 					break;
 				}
 			}
 		}
-		else if (user_input[0] == 'q') {
+		else if (is_editing && isxdigit(user_input[0])) {
+			if (EDIT_INPUT[0] == '\0') {
+				EDIT_INPUT[0] = user_input[0];
+			}
+			else if (EDIT_INPUT[1] == '\0') {
+				EDIT_INPUT[1] = user_input[0];
+			}
+		}
+		else if (user_input[0] == 'q' || user_input[0] == 'Q') {
 			// printf("\x1b[2J\x1b[H"); // clr screen rq // clear screen no longer needed cuz we're leaving the alternate buffer when exiting
 			exit(EXIT_SUCCESS);
+		}
+		else if (user_input[0] == '\r') {
+			is_editing = !(is_editing); // toggle edit mode
+			wipe_edit_input();
 		}
 	}
 
@@ -311,4 +400,17 @@ void restore_terminal_mode (void) {
 	SetConsoleMode(h_out, dw_original_out_mode);
 	SetConsoleMode(h_in, dw_original_in_mode);
 	printf("\x1b[?1049l\x1b[?25h"); // unhide the cursor && leave the alternate buffer terminal mode
+}
+
+void wipe_edit_input (void) {
+	EDIT_INPUT[0] = '\0';
+	EDIT_INPUT[1] = '\0';
+}
+
+uint8_t hex_to_dec_val (char chr) {
+	if (chr >= '0' && chr <= '9') return chr - '0';
+	if (chr >= 'A' && chr <= 'F') return chr - 'A' + 10;
+	if (chr >= 'a' && chr <= 'f') return chr - 'a' + 10;
+
+	return 0;
 }
