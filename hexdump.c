@@ -163,6 +163,9 @@ void hexedit_file (FILE* fp) {
 	size_t viewport_offset = 0, camera_x = 0, camera_y = 0;
 	unsigned char buff[EDIT_BUFF_BYTES]; // 16 bytes 16 columns
 
+	// decided to just hide the cursor && enter alternate buffer mode
+	printf("\x1b[?1049h\x1b[?25l");
+
 	while (1) {
 		printf("\x1b[2J\x1b[H");
 		fseek(fp, viewport_offset, SEEK_SET);
@@ -185,11 +188,6 @@ void hexedit_file (FILE* fp) {
 			print_hex(chunk_left, &buff[i], current_file_offset, 1, camera_x, camera_y, local_row++);
 		}
 
-		//printf("\x1b[H");
-		//printf("\x1b[12C"); // cuz the print \n in print_hex was overwriting the cursors position
-		// decided to just hide the cursor
-		printf("\x1b[?25l"); 
-
 		DWORD bytes_read; // to store how many bytes ReadFile has read for safety reasons
 		char user_input[8];
 		int success = ReadFile(h_in, user_input, 1, &bytes_read, NULL);
@@ -200,6 +198,10 @@ void hexedit_file (FILE* fp) {
 			ReadFile(h_in, &user_input[1], 2, &bytes_read, NULL);
 
 			if (user_input[1] == '[') {
+
+				// keep track so we can use it to stop navigating into empty memory past the EOF
+				size_t absolute_camera_pos = viewport_offset + (camera_y * BUFF_BYTES_HEX) + camera_x;
+
 				switch (user_input[2]) {
 				case 'A': // up arrowkey
 					if (camera_y > 0) {
@@ -211,7 +213,7 @@ void hexedit_file (FILE* fp) {
 					break;
 
 				case 'B': // down arrowkey
-					if (camera_y < 15) {
+					if (camera_y < 15 && absolute_camera_pos + 16 < file_size) {
 						camera_y += 1;
 					}
 					else if (viewport_offset + 16 < file_size) {
@@ -220,6 +222,10 @@ void hexedit_file (FILE* fp) {
 					break;
 
 				case 'C': 
+					if (absolute_camera_pos + 1 >= file_size) {
+						break; 
+					}
+
 					if (camera_x < 15) {
 						camera_x += 1;
 					}
@@ -240,18 +246,20 @@ void hexedit_file (FILE* fp) {
 					break;
 
 				case '5': // page up
+					ReadFile(h_in, &user_input[3], 1, &bytes_read, NULL); // eat the trailing ~
 					if (viewport_offset >= EDIT_BUFF_BYTES) viewport_offset -= EDIT_BUFF_BYTES;
 					else viewport_offset = 0;
 					break;
 
 				case '6': // page down
+					ReadFile(h_in, &user_input[3], 1, &bytes_read, NULL); // same reason 
 					if (viewport_offset + EDIT_BUFF_BYTES < file_size) viewport_offset += EDIT_BUFF_BYTES;
 					break;
 				}
 			}
 		}
 		else if (user_input[0] == 'q') {
-			printf("\x1b[2J\x1b[H"); // clr screen rq 
+			// printf("\x1b[2J\x1b[H"); // clr screen rq // clear screen no longer needed cuz we're leaving the alternate buffer when exiting
 			exit(EXIT_SUCCESS);
 		}
 	}
@@ -302,5 +310,5 @@ int enable_vt_proc (void) {
 void restore_terminal_mode (void) {
 	SetConsoleMode(h_out, dw_original_out_mode);
 	SetConsoleMode(h_in, dw_original_in_mode);
-	printf("\x1b[?25h"); // unhide the cursor
+	printf("\x1b[?1049l\x1b[?25h"); // unhide the cursor && leave the alternate buffer terminal mode
 }
