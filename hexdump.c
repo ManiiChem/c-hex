@@ -2,17 +2,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h> 
-#include <windows.h> // VT Sequences for TUI
 #include <stdint.h>
+
+// cross platform VT sequence setup
+#ifdef _WIN32
+	#include <windows.h> // VT Sequences for TUI
+	// global terminal state 
+	HANDLE h_out, h_in;
+	DWORD dw_original_out_mode = 0;
+	DWORD dw_original_in_mode = 0;
+#else
+	#include <termios.h>
+	#include <unistd.h>
+	struct termios orig_termios;
+#endif
 
 #define BUFF_BYTES 1024
 #define BUFF_BYTES_HEX 16 // formats better in the terminal
 #define EDIT_BUFF_BYTES 256
-
-// global terminal state 
-HANDLE h_out, h_in;
-DWORD dw_original_out_mode = 0;
-DWORD dw_original_in_mode = 0;
 
 char EDIT_INPUT[2] = { '\0', '\0'};
 
@@ -22,14 +29,15 @@ void print_hex (const size_t bytes_to_read, unsigned char* binary_data, size_t m
 void read_file_hex (FILE* fp);
 void hexedit_file (FILE* fp);
 void cli_syntax (void);
-int enable_vt_proc (void);
+int init_terminal (void);
 void restore_terminal_mode (void);
+int read_input_bytes (char* buffer, size_t count);
 void wipe_edit_input (void);
 uint8_t hex_to_dec_val (char chr);
 
 int main (int argc, char *argv[]) {
-	if (enable_vt_proc() == -1) {
-		printf("Error: Could not enable Windows VT Processing\n");
+	if (init_terminal() == -1) {
+		printf("Error: Could not initialize terminal\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -166,7 +174,7 @@ void read_file_hex (FILE* fp) {
 
 void hexedit_file (FILE* fp) {
 	fseek(fp, 0, SEEK_END);
-	long file_size = ftell(fp);
+	size_t file_size = (size_t) ftell(fp); // fixed the long and size_t type mismatch
 	fseek(fp, 0, SEEK_SET);
 
 	size_t viewport_offset = 0, camera_x = 0, camera_y = 0;
@@ -238,16 +246,17 @@ void hexedit_file (FILE* fp) {
 			if (EDIT_INPUT[1] != '\0') {
 				putchar(toupper(EDIT_INPUT[1]));
 			}
+
+			fflush(stdout); // need to flush because stdous is line buffered in posix systems
 		}
 
-		DWORD bytes_read; // to store how many bytes ReadFile has read for safety reasons
 		char user_input[8];
-		int success = ReadFile(h_in, user_input, 1, &bytes_read, NULL);
-		if (success == 0 || bytes_read == 0) continue; // check for input again if something goes wrong
+		int bytes_read = read_input_bytes(user_input, 1);
+		if (bytes_read == 0) continue;
 
 		if (user_input[0] == '\x1b') {
-			// read the next two bytes for example '[' and 'B' 
-			ReadFile(h_in, &user_input[1], 2, &bytes_read, NULL);
+
+			bytes_read = read_input_bytes(&user_input[1], 2);
 
 			if (user_input[1] == '[') {
 
@@ -310,8 +319,7 @@ void hexedit_file (FILE* fp) {
 					break;
 
 				case '5': // page up
-					ReadFile(h_in, &user_input[3], 1, &bytes_read, NULL); // eat the trailing ~
-					
+					read_input_bytes(&user_input[3], 1); // eat the trailing ~
 					if (viewport_offset >= EDIT_BUFF_BYTES) {
 						viewport_offset -= EDIT_BUFF_BYTES;
 						wipe_edit_input();
@@ -324,8 +332,7 @@ void hexedit_file (FILE* fp) {
 					break;
 
 				case '6': // page down
-					ReadFile(h_in, &user_input[3], 1, &bytes_read, NULL); // same reason 
-					
+					read_input_bytes(&user_input[3], 1); // same reason 
 					if (viewport_offset + EDIT_BUFF_BYTES < file_size) {
 						viewport_offset += EDIT_BUFF_BYTES;
 						wipe_edit_input();
@@ -347,17 +354,11 @@ void hexedit_file (FILE* fp) {
 			// printf("\x1b[2J\x1b[H"); // clr screen rq // clear screen no longer needed cuz we're leaving the alternate buffer when exiting
 			exit(EXIT_SUCCESS);
 		}
-		else if (user_input[0] == '\r') {
+		else if (user_input[0] == '\r' || user_input[0] == '\n') { // \n for Unix enter key handling
 			is_editing = !(is_editing); // toggle edit mode
 			wipe_edit_input();
 		}
 	}
-
-	// personal notes
-	// make custom cursor navigation (mostly done)
-	// add replacing functionality
-	// rewrite the whole file or better: Direct Disk Editing
-	// add keybinds like quit, save, search somewhere in the middle (working on it)
 }
 
 void cli_syntax (void) {
@@ -367,7 +368,8 @@ void cli_syntax (void) {
 	exit(EXIT_FAILURE);
 }
 
-int enable_vt_proc (void) {
+int init_terminal (void) {
+#ifdef _WIN32
 	h_out = GetStdHandle(STD_OUTPUT_HANDLE);
 	if (h_out == INVALID_HANDLE_VALUE) return -1;
 
@@ -394,12 +396,46 @@ int enable_vt_proc (void) {
 	if (!SetConsoleMode(h_in, dw_in_mode)) return -1;
 
 	return 0;
+#else
+	if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) return -1;
+
+	struct termios raw = orig_termios;
+	
+	// turn off echoing and canonical mode
+	raw.c_lflag &= ~(ECHO | ICANON);
+	
+	// read returns as soon as 1 byte is pressed 
+	raw.c_cc[VMIN] = 1;
+	raw.c_cc[VTIME] = 0;
+
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) return -1;
+	return 0;
+#endif
 }
 
 void restore_terminal_mode (void) {
+#ifdef _WIN32
 	SetConsoleMode(h_out, dw_original_out_mode);
 	SetConsoleMode(h_in, dw_original_in_mode);
+	
+#else
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+#endif
 	printf("\x1b[?1049l\x1b[?25h"); // unhide the cursor && leave the alternate buffer terminal mode
+	fflush(stdout); // needed on posix to make sure string prints before exiting
+}
+
+int read_input_bytes (char *buffer, size_t count) {
+#ifdef _WIN32
+	DWORD bytes_read;
+	int success = ReadFile(h_in, buffer, (DWORD) count, &bytes_read, NULL);
+	if (success == 0 || bytes_read == 0) return 0;
+	return (int) bytes_read;
+#else
+	ssize_t bytes_read = read(STDIN_FILENO, buffer, count);
+	if (bytes_read <= 0) return 0;
+	return (int)bytes_read;
+#endif
 }
 
 void wipe_edit_input (void) {
